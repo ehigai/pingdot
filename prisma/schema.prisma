@@ -1,0 +1,119 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MessageStatus {
+  SENT
+  DELIVERED
+  READ
+}
+
+model User {
+  id             String    @id @default(uuid())
+  email          String    @unique
+  clerkId        String    @unique
+  full_name      String
+  profile_image  String?
+  password_hash  String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  // Relations
+  conversations     ConversationMember[]
+  messages          Message[]
+  messageReads      MessageRead[]
+  messageDeliveries MessageDelivery[]
+  presence          UserPresence?
+}
+
+model UserPresence {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  isOnline  Boolean  @default(false)
+  lastSeenAt DateTime @default(now())
+  device    String?   // optional: e.g. "mobile", "web"
+  statusMsg String?   // optional: custom status like "Busy"
+
+  // Relations
+  user User @relation(fields: [userId], references: [id])
+}
+
+model Conversation {
+  id          String                @id @default(uuid())
+  name        String?               // Only for group chats
+  isGroup     Boolean               @default(false)
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  // Relations
+  members     ConversationMember[]
+  messages    Message[]
+}
+
+model ConversationMember {
+  id              String       @id @default(uuid())
+  userId          String
+  conversationId  String
+  role            String?      // e.g., "admin", "member"
+  joinedAt        DateTime     @default(now())
+
+  // Relations
+  user         User         @relation(fields: [userId], references: [id])
+  conversation Conversation @relation(fields: [conversationId], references: [id])
+
+  @@unique([userId, conversationId])
+}
+
+model Message {
+  id              String        @id @default(uuid())
+  conversationId  String
+  senderId        String
+  content         String
+  imageUrl        String?
+  status          MessageStatus @default(SENT)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  // Relations
+  conversation Conversation   @relation(fields: [conversationId], references: [id])
+  sender       User           @relation(fields: [senderId], references: [id])
+  reads        MessageRead[]
+  deliveries   MessageDelivery[]
+}
+
+model MessageDelivery {
+  id          String   @id @default(uuid())
+  messageId   String
+  userId      String
+  deliveredAt DateTime @default(now())
+
+  // Relations
+  message Message @relation(fields: [messageId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@unique([messageId, userId])
+}
+
+model MessageRead {
+  id        String   @id @default(uuid())
+  messageId String
+  userId    String
+  readAt    DateTime @default(now())
+
+  // Relations
+  message Message @relation(fields: [messageId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
+
+  @@unique([messageId, userId])
+}

@@ -9,7 +9,7 @@ export class UsersController {
   @UseGuards(ClerkAuthGuard)
   @Get('me')
   async getMe(@Req() req) {
-    const { sub, email } = req.user;
-    return this.usersService.findOrCreate(sub, email);
+    const { sub, email, full_name } = req.user;
+    return this.usersService.findOrCreate(sub, email, full_name);
   }
 }
