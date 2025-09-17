@@ -1,9 +1,10 @@
 import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import { AuthService } from './auth.service';
-import { Prisma } from '@prisma/client';
 import { SignInDto } from './dto/sign-in.dto';
 import { SignUpDto } from './dto/sign-up.dto';
+import { PublicRoute } from './auth.public';
 
+@PublicRoute()
 @Controller('auth')
 export class AuthController {
   constructor(private authService: AuthService) {}
