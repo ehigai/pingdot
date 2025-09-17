@@ -22,7 +22,6 @@ enum MessageStatus {
 model User {
   id             String    @id @default(uuid())
   email          String    @unique
-  clerkId        String    @unique
   full_name      String
   profile_image  String?
   password_hash  String
