@@ -3,6 +3,7 @@ import { UsersService } from 'src/users/users.service';
 import bcrypt from 'bcrypt';
 import { JwtService } from '@nestjs/jwt';
 import { SignUpDto } from './dto/sign-up.dto';
+import { jwtConstants } from './constants';
 
 @Injectable()
 export class AuthService {
@@ -49,7 +50,38 @@ export class AuthService {
     const payload = { sub: user.id, email: user.email };
 
     return {
-      accessToken: await this.jwtService.signAsync(payload),
+      accessToken: await this.jwtService.signAsync(payload, {
+        secret: jwtConstants.secret,
+        expiresIn: '15m',
+      }),
+      refreshToken: await this.jwtService.signAsync(payload, {
+        secret: jwtConstants.refreshSecret,
+        expiresIn: '7d',
+      }),
     };
+  }
+
+  async refresh(refreshToken: string) {
+    try {
+      const payload = await this.jwtService.verifyAsync(refreshToken, {
+        secret: jwtConstants.refreshSecret,
+      });
+
+      const userId = payload.sub;
+
+      const accessToken = await this.jwtService.signAsync(
+        { sub: userId, email: payload.email },
+        { secret: jwtConstants.secret, expiresIn: '15m' },
+      );
+
+      const newRefreshToken = await this.jwtService.signAsync(
+        { sub: userId, email: payload.email },
+        { secret: jwtConstants.refreshSecret, expiresIn: '7d' },
+      );
+
+      return { accessToken, newRefreshToken };
+    } catch (err) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
   }
 }

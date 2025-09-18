@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Request } from 'express';
-import { jwtConstants } from './constants';
+import { authErrorConstants, jwtConstants } from './constants';
 import { Reflector } from '@nestjs/core';
 import { IS_PUBLIC_KEY } from './auth.public';
 import { WsException } from '@nestjs/websockets';
@@ -67,7 +67,11 @@ export class AuthGuard implements CanActivate {
     type: 'http' | 'ws',
   ): Promise<boolean> {
     if (!token) {
-      throw new UnauthorizedException();
+      throw new UnauthorizedException({
+        status: 401,
+        errorCode: authErrorConstants.invalidAccessToken,
+        message: 'Unauthorized',
+      });
     }
 
     try {

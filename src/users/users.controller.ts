@@ -9,7 +9,7 @@ export class UsersController {
   @UseGuards(AuthGuard)
   @Get('profile')
   async getMe(@Request() req) {
-    const { email } = req.user;
-    return this.usersService.findOne(email);
+    const { sub: userId } = req.user;
+    return this.usersService.fetchUserProfile(userId);
   }
 }
