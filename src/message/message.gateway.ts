@@ -1,4 +1,4 @@
-import { UseGuards } from '@nestjs/common';
+import { UseGuards, Logger } from '@nestjs/common';
 import {
   ConnectedSocket,
   MessageBody,
@@ -12,9 +12,14 @@ import { Server, Socket } from 'socket.io';
 import { AuthGuard } from 'src/auth/auth.guard';
 import { UsersService } from 'src/users/users.service';
 import { MessageService } from './message.service';
+import { JwtService } from '@nestjs/jwt';
+import { jwtConstants } from 'src/auth/constants';
+import { appConstants } from 'src/auth/constants';
 
 @UseGuards(AuthGuard)
-@WebSocketGateway({ cors: { origin: '*' } })
+@WebSocketGateway({
+  cors: { origin: appConstants.allowedOrigins, credentials: true },
+})
 export class MessageGateway
   implements OnGatewayConnection, OnGatewayDisconnect
 {
@@ -27,22 +32,52 @@ export class MessageGateway
   // Map groupId ==> Set<userId>
   private groupMembers = new Map<string, Set<string>>();
 
+  private readonly logger = new Logger(MessageGateway.name);
+
   constructor(
     private readonly userService: UsersService,
     private readonly messageService: MessageService,
+    private readonly jwtService: JwtService,
   ) {}
 
   async handleConnection(client: Socket) {
-    const user = client.user;
-    if (user?.sub) {
-      this.userSocketMap.set(user.sub, client.id);
-      await this.userService.setPresence(user.sub, true);
-      console.log(`User ${user.sub} connected with socket ${client.id}`);
+    // Try to get token from handshake auth/header/query
+    const headerAuth = client.handshake?.headers?.authorization;
+    let token: string | undefined;
+    if (headerAuth) {
+      const [, t] = headerAuth.split(' ');
+      token = t;
+    }
+    if (!token && client.handshake?.auth?.token) {
+      const [, t] = client.handshake.auth.token.split(' ');
+      token = t;
+    }
+    if (!token && client.handshake?.query?.token) {
+      token = client.handshake.query.token as string | undefined;
+    }
 
-      // Optional: broadcast presence
-      this.server.emit('presence', { userId: user.sub, online: true });
-    } else {
-      console.log('Connection without user payload, disconnecting...');
+    this.logger.log(`New client connected: ${client.id} token: ${token}`);
+
+    if (!token) {
+      this.logger.warn('No token provided, disconnecting...');
+      client.disconnect();
+      return;
+    }
+
+    try {
+      const payload = await this.jwtService.verifyAsync(token, {
+        secret: jwtConstants.secret,
+      });
+      // attach payload
+      (client as any).user = payload;
+      this.logger.log(`User ${payload.sub} connected with socket ${client.id}`);
+
+      // normal connection flow
+      this.userSocketMap.set(payload.sub, client.id);
+      await this.userService.setPresence(payload.sub, true);
+      this.server.emit('presence', { userId: payload.sub, online: true });
+    } catch (err) {
+      this.logger.warn('Invalid token, disconnecting...', err as any);
       client.disconnect();
     }
   }
@@ -87,6 +122,48 @@ export class MessageGateway
         text: data.text,
         timestamp: new Date(),
       });
+    }
+  }
+
+  // Join a conversation room
+  @SubscribeMessage('join-conversation')
+  async handleJoinConversation(
+    @MessageBody() data: { conversationId: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    const userId = client.user?.sub as string;
+    if (!userId) return;
+    client.join(data.conversationId);
+    this.logger.log(
+      `User ${userId} joined conversation ${data.conversationId}`,
+    );
+  }
+
+  // Send a message to a conversation
+  @SubscribeMessage('send-message')
+  async handleSendMessage(
+    @MessageBody() data: { conversationId: string; content: string },
+    @ConnectedSocket() client: Socket,
+  ) {
+    const senderId = client.user?.sub as string;
+    if (!senderId) return;
+
+    // Persist message
+    try {
+      const saved = await this.messageService.create({
+        conversationId: data.conversationId,
+        content: data.content,
+        senderId,
+      } as any);
+
+      // Broadcast to conversation room
+      this.server.to(data.conversationId).emit('new-message', saved);
+      // Ack back to sender
+      return { status: 'ok', message: saved };
+    } catch (err: any) {
+      this.logger.error('Failed to save message', err?.message || err);
+      // return error with message
+      return { status: 'error', error: err?.message || 'Failed to save' };
     }
   }
 
