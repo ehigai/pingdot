@@ -36,7 +36,6 @@ export class MessageController {
   async findAllConversations(@Request() req) {
     const { sub: userId } = req.user;
     const result = await this.messageService.findAllUserConversations(userId);
-    console.log('result', result);
     return result;
   }
 

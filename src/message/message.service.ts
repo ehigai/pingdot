@@ -4,8 +4,6 @@ import { UpdateMessageDto } from './dto/update-message.dto';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateConversationDto } from './dto/create-conversation.dto';
 import { UsersService } from 'src/users/users.service';
-import type { Prisma } from '@prisma/client';
-import { group } from 'console';
 
 @Injectable()
 export class MessageService {
@@ -94,10 +92,9 @@ export class MessageService {
       throw new BadRequestException('At least one other member is required');
     }
 
-    // Resolve whether this is a group based on explicit flag or final participant count
+    // Check if it is a group
     const isGroupResolved = Boolean(isGroup) || uniqueEmails.length > 2;
 
-    // Create members array: for private convos all roles are null; for groups, creator becomes ADMIN and others MEMBER
     const members = uniqueEmails.map((memberEmail) => ({
       user: { connect: { email: memberEmail } },
       role: isGroupResolved
@@ -118,8 +115,6 @@ export class MessageService {
       }
       const userIds = users.map((user) => (user as any).id);
 
-      // Directly find a non-group conversation that contains both userIds and no others
-      // For private (2-person) conversations this enforces exact match: both users present and every member is in userIds
       const existing = await this.prisma.conversation.findFirst({
         where: {
           isGroup: false,
@@ -142,8 +137,7 @@ export class MessageService {
       throw new BadRequestException('Name is required to create a group');
     }
 
-    // Disallow creating a group conversation with an initial message. Messages must be sent
-    // individually after group creation.
+    // Disallow creating a group conversation with an initial message
     if (isGroupResolved && message) {
       throw new BadRequestException(
         'Cannot create a group conversation with an initial message. Send messages after group is created.',
@@ -175,17 +169,88 @@ export class MessageService {
   }
 
   async findAllUserConversations(userId: string) {
-    const result = await this.prisma.conversation.findMany({
+    // Fetch conversations where the user is a member
+    const conversations = await this.prisma.conversation.findMany({
       where: {
         members: {
-          some: {
-            userId: {
-              equals: userId,
+          some: { userId: userId },
+        },
+      },
+      include: {
+        // include other members except the requesting user
+        members: {
+          where: { userId: { not: userId } },
+          include: {
+            user: {
+              select: {
+                id: true,
+                email: true,
+                profile_image: true,
+                full_name: true,
+              },
             },
           },
         },
+        messages: {
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: { content: true, status: true, createdAt: true },
+        },
+        _count: {
+          select: { members: true },
+        },
       },
+      orderBy: { updatedAt: 'desc' },
     });
-    return result;
+
+    // Map to minimal shape expected by client
+    const mappedConversation = conversations.map((conversation) => {
+      const conversationId = conversation.id;
+      const isGroup = conversation.isGroup;
+
+      // Determine display name and imageUrl
+      let name: string | null = null;
+      let imageUrl: string | null = null;
+
+      if (isGroup) {
+        name = conversation.name || 'Group';
+        imageUrl = null;
+      } else {
+        // private convo: members include only the other participant (we excluded the requester above)
+        const other = conversation.members[0]?.user;
+        name = other ? other.email : null;
+        imageUrl = other ? (other.profile_image ?? null) : null;
+      }
+
+      const latest = conversation.messages?.[0];
+      const latestMessage = latest
+        ? { content: latest.content, status: latest.status }
+        : { content: null, status: null };
+
+      // memberCount from _count (total members in the conversation)
+      const memberCount =
+        (conversation as any)._count?.members ??
+        conversation.members.length + 1;
+
+      // preview of other members (up to 3)
+      const otherMembers = (conversation.members || [])
+        .slice(0, 3)
+        .map((member) => ({
+          email: member.user.email,
+          profile_image: member.user.profile_image ?? null,
+        }));
+
+      return {
+        conversationId,
+        name,
+        latestMessage,
+        imageUrl,
+        memberCount,
+        otherMembers,
+        isGroup,
+      };
+    });
+
+    return mappedConversation;
   }
 }
