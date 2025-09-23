@@ -11,7 +11,7 @@ export class UsersService {
   }
 
   async fetchUserProfile(userId: string) {
-    return this.prisma.user.findUnique({
+    return await this.prisma.user.findUnique({
       where: { id: userId },
       omit: {
         password_hash: true,
@@ -25,7 +25,7 @@ export class UsersService {
   }
 
   async setPresence(userId: string, online: boolean) {
-    return this.prisma.userPresence.upsert({
+    return await this.prisma.userPresence.upsert({
       where: { userId },
       update: { isOnline: online, lastSeenAt: new Date() },
       create: { userId, isOnline: online, lastSeenAt: new Date() },

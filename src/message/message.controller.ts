@@ -1,7 +1,17 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  Delete,
+  Request,
+} from '@nestjs/common';
 import { MessageService } from './message.service';
 import { CreateMessageDto } from './dto/create-message.dto';
 import { UpdateMessageDto } from './dto/update-message.dto';
+import { CreateConversationDto } from './dto/create-conversation.dto';
 
 @Controller('message')
 export class MessageController {
@@ -12,9 +22,28 @@ export class MessageController {
     return this.messageService.create(createMessageDto);
   }
 
-  @Get()
-  findAll() {
-    return this.messageService.findAll();
+  // Create a new conversation
+  @Post('/conversations/new')
+  async createConversation(
+    @Body() data: CreateConversationDto,
+    @Request() req,
+  ) {
+    const { sub: userId } = req.user;
+    return await this.messageService.createConversation(data, userId);
+  }
+  // Get all conversations
+  @Get('conversations')
+  async findAllConversations(@Request() req) {
+    const { sub: userId } = req.user;
+    const result = await this.messageService.findAllUserConversations(userId);
+    console.log('result', result);
+    return result;
+  }
+
+  // Get the open conversation
+  @Get('conversations/:conversationId')
+  openConversation(@Param('conversationId') id: string) {
+    return this.messageService.findOpenConversation(id);
   }
 
   @Get(':id')
