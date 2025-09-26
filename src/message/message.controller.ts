@@ -23,26 +23,25 @@ export class MessageController {
   }
 
   // Create a new conversation
-  @Post('/conversations/new')
-  async createConversation(
-    @Body() data: CreateConversationDto,
-    @Request() req,
-  ) {
-    const { sub: userId } = req.user;
-    return await this.messageService.createConversation(data, userId);
-  }
+  // @Post('/conversations/new')
+  // async createConversation(
+  //   @Body() data: CreateConversationDto,
+  //   @Request() req,
+  // ) {
+  //   const { sub: userId } = req.user;
+  //   return await this.messageService.createConversation(data, userId);
+  // }
   // Get all conversations
   @Get('conversations')
   async findAllConversations(@Request() req) {
     const { sub: userId } = req.user;
-    const result = await this.messageService.findAllUserConversations(userId);
-    return result;
+    return await this.messageService.findAllUserConversations(userId);
   }
 
   // Get the open conversation
   @Get('conversations/:conversationId')
-  openConversation(@Param('conversationId') id: string) {
-    return this.messageService.findOpenConversation(id);
+  async openConversation(@Param('conversationId') id: string) {
+    return await this.messageService.getOpenConversationMessages(id);
   }
 
   @Get(':id')

@@ -15,6 +15,7 @@ import { MessageService } from './message.service';
 import { JwtService } from '@nestjs/jwt';
 import { jwtConstants } from 'src/auth/constants';
 import { appConstants } from 'src/auth/constants';
+import { CreateConversationDto } from './dto/create-conversation.dto';
 
 @UseGuards(AuthGuard)
 @WebSocketGateway({
@@ -56,7 +57,7 @@ export class MessageGateway
       token = client.handshake.query.token as string | undefined;
     }
 
-    this.logger.log(`New client connected: ${client.id} token: ${token}`);
+    this.logger.log(`New client connected: ${client.id}`);
 
     if (!token) {
       this.logger.warn('No token provided, disconnecting...');
@@ -139,10 +140,57 @@ export class MessageGateway
     );
   }
 
+  // New conversation
+  @SubscribeMessage('create-conversation')
+  async handleNewConversation(
+    @MessageBody() data: CreateConversationDto,
+    @ConnectedSocket() client: Socket,
+  ) {
+    const userId = client.user?.sub as string;
+    if (!userId) return { status: 'error', error: 'Unauthorized' };
+
+    console.log('REACHEDHERE');
+    console.log('user data', data);
+
+    // Persist conversation
+    const conversation = await this.messageService.createConversation(
+      data,
+      userId,
+    );
+
+    client.join(conversation.id);
+
+    const participantsId = conversation.members.map((conversationMember) => ({
+      id: conversationMember.userId,
+    }));
+
+    // Notify all participants individually
+    for (const participant of participantsId) {
+      // don't emit back to the creator
+      if (participant.id !== userId) {
+        const socketId = this.userSocketMap.get(participant.id);
+        console.log('SocketId', socketId);
+        if (socketId) {
+          this.server.to(socketId).emit('new-conversation', conversation);
+        }
+      }
+    }
+
+    // Also broadcast to conversation room
+    //this.server.to(conversation.id).emit('new-conversation', conversation);
+
+    // Ack back to sender
+    return { status: 'ok', conversation };
+  }
+
   // Send a message to a conversation
   @SubscribeMessage('send-message')
   async handleSendMessage(
-    @MessageBody() data: { conversationId: string; content: string },
+    @MessageBody()
+    data: {
+      conversationId: string;
+      message: { clientId: string; content: string };
+    },
     @ConnectedSocket() client: Socket,
   ) {
     const senderId = client.user?.sub as string;
@@ -152,14 +200,14 @@ export class MessageGateway
     try {
       const saved = await this.messageService.create({
         conversationId: data.conversationId,
-        content: data.content,
+        content: data.message.content,
         senderId,
       } as any);
 
       // Broadcast to conversation room
       this.server.to(data.conversationId).emit('new-message', saved);
       // Ack back to sender
-      return { status: 'ok', message: saved };
+      return { status: 'ok', clientId: data.message.clientId, message: saved };
     } catch (err: any) {
       this.logger.error('Failed to save message', err?.message || err);
       // return error with message

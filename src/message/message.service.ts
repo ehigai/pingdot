@@ -58,8 +58,12 @@ export class MessageService {
 
   //  CONVERSATIONS
 
-  async findOpenConversation(id: string) {
-    return await this.prisma.conversation.findUnique({ where: { id } });
+  async getOpenConversationMessages(id: string) {
+    const result = await this.prisma.conversation.findUnique({
+      where: { id },
+      select: { messages: true },
+    });
+    return result?.messages;
   }
 
   async createConversation(data: CreateConversationDto, userId: string) {
@@ -128,7 +132,8 @@ export class MessageService {
       });
 
       if (existing) {
-        return existing; // reuse existing private conversation
+        const name = await this.getConversationName(existing.id, userId);
+        return { ...existing, name }; // reuse existing private conversation
       }
     }
 
@@ -162,10 +167,15 @@ export class MessageService {
       };
     }
 
-    return await this.prisma.conversation.create({
+    const newConversation = await this.prisma.conversation.create({
       data: convoData,
       include: { members: true, messages: true },
     });
+    const convoName = await this.getConversationName(
+      newConversation.id,
+      userId,
+    );
+    return { ...newConversation, name: convoName };
   }
 
   async findAllUserConversations(userId: string) {
@@ -205,7 +215,6 @@ export class MessageService {
 
     // Map to minimal shape expected by client
     const mappedConversation = conversations.map((conversation) => {
-      const conversationId = conversation.id;
       const isGroup = conversation.isGroup;
 
       // Determine display name and imageUrl
@@ -241,7 +250,7 @@ export class MessageService {
         }));
 
       return {
-        conversationId,
+        id: conversation.id,
         name,
         latestMessage,
         imageUrl,
@@ -252,5 +261,31 @@ export class MessageService {
     });
 
     return mappedConversation;
+  }
+
+  async getConversationName(conversationId: string, requesterId: string) {
+    const conversation = await this.prisma.conversation.findUnique({
+      where: { id: conversationId },
+      include: {
+        members: {
+          where: { userId: { not: requesterId } },
+          include: {
+            user: {
+              select: {
+                full_name: true,
+                email: true,
+              },
+            },
+          },
+        },
+      },
+    });
+    if (conversation?.isGroup) {
+      return conversation.name;
+    }
+    return (
+      conversation?.members[0].user.full_name ||
+      conversation?.members[0].user.email
+    );
   }
 }
