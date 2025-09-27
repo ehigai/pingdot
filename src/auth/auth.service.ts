@@ -13,7 +13,6 @@ export class AuthService {
   ) {}
 
   async signUp(data: SignUpDto) {
-    console.log('data:', data);
     let user = await this.usersService.findOne(data.email);
     if (user) {
       throw new UnauthorizedException('User already exists');

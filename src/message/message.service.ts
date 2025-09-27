@@ -9,7 +9,6 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateConversationDto } from './dto/create-conversation.dto';
 import { UsersService } from 'src/users/users.service';
 import { ReturnConversationDto } from './dto/return-conversation.dto';
-import { Conversation, Prisma } from '@prisma/client';
 
 @Injectable()
 export class MessageService {
@@ -38,6 +37,19 @@ export class MessageService {
           conversationId,
           senderId,
           content,
+        },
+        select: {
+          id: true,
+          content: true,
+          imageUrl: true,
+          status: true,
+          conversationId: true,
+          sender: {
+            select: {
+              id: true,
+              email: true,
+            },
+          },
         },
       });
       return message;
@@ -130,7 +142,7 @@ export class MessageService {
       imageUrl = conversation.image_url;
     } else {
       const other = conversation.members[0]?.user;
-      name = other ? other.email : null;
+      name = other ? (other.full_name ? other.full_name : other.email) : null;
       imageUrl = other ? (other.profile_image ?? null) : null;
     }
 
@@ -168,8 +180,25 @@ export class MessageService {
   async getOpenConversationMessages(id: string) {
     const result = await this.prisma.conversation.findUnique({
       where: { id },
-      select: { messages: true },
+      select: {
+        messages: {
+          select: {
+            id: true,
+            content: true,
+            imageUrl: true,
+            status: true,
+            conversationId: true,
+            sender: {
+              select: {
+                id: true,
+                email: true,
+              },
+            },
+          },
+        },
+      },
     });
+
     return result?.messages;
   }
 
@@ -348,6 +377,7 @@ export class MessageService {
           include: {
             user: {
               select: {
+                full_name: true,
                 email: true,
                 profile_image: true,
               },
@@ -384,9 +414,16 @@ export class MessageService {
         isGroup: conversation.isGroup,
       };
     }
+    let friendName: string | null = null;
+    const other = conversation.members[0]?.user;
+    friendName = other
+      ? other.full_name
+        ? other.full_name
+        : other.email
+      : null;
     return {
       id: conversation.id,
-      name,
+      name: friendName,
       latestMessage,
       imageUrl: (conversation as any).image_url,
       memberCount: conversation.members.length,
