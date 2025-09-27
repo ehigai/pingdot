@@ -1,9 +1,15 @@
-import { Injectable, BadRequestException } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+} from '@nestjs/common';
 import { CreateMessageDto } from './dto/create-message.dto';
 import { UpdateMessageDto } from './dto/update-message.dto';
 import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateConversationDto } from './dto/create-conversation.dto';
 import { UsersService } from 'src/users/users.service';
+import { ReturnConversationDto } from './dto/return-conversation.dto';
+import { Conversation, Prisma } from '@prisma/client';
 
 @Injectable()
 export class MessageService {
@@ -11,6 +17,10 @@ export class MessageService {
     private prisma: PrismaService,
     private userService: UsersService,
   ) {}
+
+  // -------------------------
+  // Messages
+  // -------------------------
 
   async create(createMessageDto: CreateMessageDto & { senderId: string }) {
     const { conversationId, content, senderId } = createMessageDto;
@@ -56,7 +66,104 @@ export class MessageService {
     return this.prisma.message.delete({ where: { id: String(id) } });
   }
 
-  //  CONVERSATIONS
+  // -------------------------
+  // Conversations - helpers
+  // -------------------------
+
+  private async resolveUsersFromEmails(emails: string[]) {
+    const users = await Promise.all(
+      emails.map((e) => this.userService.findOne(e)),
+    );
+    for (let i = 0; i < emails.length; i++) {
+      if (!users[i]) {
+        throw new BadRequestException(
+          `User with email ${emails[i]} does not exist`,
+        );
+      }
+    }
+    return users;
+  }
+
+  private buildMemberCreates(
+    uniqueEmails: string[],
+    creatorEmail: string,
+    isGroupResolved: boolean,
+  ) {
+    return uniqueEmails.map((memberEmail) => ({
+      user: { connect: { email: memberEmail } },
+      role: isGroupResolved
+        ? memberEmail === creatorEmail.toLowerCase()
+          ? 'ADMIN'
+          : 'MEMBER'
+        : null,
+    }));
+  }
+
+  private async findExistingPrivateConversationForTwo(userIds: string[]) {
+    if (userIds.length !== 2) return null;
+
+    const existing = await this.prisma.conversation.findFirst({
+      where: {
+        isGroup: false,
+        AND: [
+          { members: { some: { userId: userIds[0] } } },
+          { members: { some: { userId: userIds[1] } } },
+          { members: { every: { userId: { in: userIds } } } },
+        ],
+      },
+      include: {
+        members: { include: { user: true } },
+        messages: true,
+      },
+    });
+    return existing;
+  }
+
+  private mapConversationForList(conversation) {
+    const isGroup = conversation.isGroup;
+
+    let name: string | null = null;
+    let imageUrl: string | null = null;
+
+    if (isGroup) {
+      name = conversation.name || 'Group';
+      imageUrl = conversation.image_url;
+    } else {
+      const other = conversation.members[0]?.user;
+      name = other ? other.email : null;
+      imageUrl = other ? (other.profile_image ?? null) : null;
+    }
+
+    const latest = conversation.messages?.[0];
+    const latestMessage = latest
+      ? { content: latest.content, status: latest.status }
+      : { content: null, status: null };
+
+    const memberCount =
+      (conversation as any)._count?.members ?? conversation.members.length + 1;
+
+    const otherMembers = (conversation.members || [])
+      .slice(0, 3)
+      .map((member) => ({
+        id: member.userId,
+        email: member.user.email,
+        profile_image: member.user.profile_image ?? null,
+      }));
+
+    return {
+      id: conversation.id,
+      name,
+      latestMessage,
+      imageUrl,
+      memberCount,
+      members: otherMembers,
+      isGroup,
+    };
+  }
+
+  // -------------------------
+  // Conversations - public
+  // -------------------------
 
   async getOpenConversationMessages(id: string) {
     const result = await this.prisma.conversation.findUnique({
@@ -66,18 +173,16 @@ export class MessageService {
     return result?.messages;
   }
 
-  async createConversation(data: CreateConversationDto, userId: string) {
+  async createConversation(
+    data: CreateConversationDto,
+    userId: string,
+  ): Promise<ReturnConversationDto> {
     const { name, email, isGroup, message } = data;
 
-    for (let i = 0; i < email.length; i++) {
-      const exists = await this.userService.findOne(email[i]);
+    const providedEmails = Array.isArray(email) ? email : [];
+    // validate provided emails exist (throws same message as original)
+    await this.resolveUsersFromEmails(providedEmails);
 
-      if (!exists) {
-        throw new BadRequestException(
-          `User with email ${email[i]} does not exist`,
-        );
-      }
-    }
     // Ensure creator exists
     const creator = await this.userService.fetchUserProfile(userId);
     if (!creator) {
@@ -85,7 +190,6 @@ export class MessageService {
     }
 
     // Build a deduplicated list of emails including the creator
-    const providedEmails = Array.isArray(email) ? email : [];
     const dedupSet = new Set<string>(
       providedEmails.map((e) => e.toLowerCase()),
     );
@@ -99,41 +203,27 @@ export class MessageService {
     // Check if it is a group
     const isGroupResolved = Boolean(isGroup) || uniqueEmails.length > 2;
 
-    const members = uniqueEmails.map((memberEmail) => ({
-      user: { connect: { email: memberEmail } },
-      role: isGroupResolved
-        ? memberEmail === creator.email.toLowerCase()
-          ? 'ADMIN'
-          : 'MEMBER'
-        : null,
-    }));
+    const members = this.buildMemberCreates(
+      uniqueEmails,
+      creator.email,
+      isGroupResolved,
+    );
 
     // If this is a private convo (not a group), attempt to find an existing conversation with the exact same two participants
     if (!isGroupResolved) {
       // Resolve emails to user ids
       const users = await Promise.all(
-        uniqueEmails.map((email) => this.userService.findOne(email)),
+        uniqueEmails.map((e) => this.userService.findOne(e)),
       );
       if (users.some((user) => !user)) {
         throw new BadRequestException('One or more users not found');
       }
       const userIds = users.map((user) => (user as any).id);
 
-      const existing = await this.prisma.conversation.findFirst({
-        where: {
-          isGroup: false,
-          AND: [
-            { members: { some: { userId: userIds[0] } } },
-            { members: { some: { userId: userIds[1] } } },
-            { members: { every: { userId: { in: userIds } } } },
-          ],
-        },
-        include: { members: true, messages: true },
-      });
-
+      const existing =
+        await this.findExistingPrivateConversationForTwo(userIds);
       if (existing) {
-        const name = await this.getConversationName(existing.id, userId);
-        return { ...existing, name }; // reuse existing private conversation
+        return await this.normalizeConversation(existing.id, userId);
       }
     }
 
@@ -171,14 +261,13 @@ export class MessageService {
       data: convoData,
       include: { members: true, messages: true },
     });
-    const convoName = await this.getConversationName(
-      newConversation.id,
-      userId,
-    );
-    return { ...newConversation, name: convoName };
+
+    return await this.normalizeConversation(newConversation.id, userId);
   }
 
-  async findAllUserConversations(userId: string) {
+  async findAllUserConversations(
+    userId: string,
+  ): Promise<ReturnConversationDto[]> {
     // Fetch conversations where the user is a member
     const conversations = await this.prisma.conversation.findMany({
       where: {
@@ -213,57 +302,15 @@ export class MessageService {
       orderBy: { updatedAt: 'desc' },
     });
 
-    // Map to minimal shape expected by client
-    const mappedConversation = conversations.map((conversation) => {
-      const isGroup = conversation.isGroup;
-
-      // Determine display name and imageUrl
-      let name: string | null = null;
-      let imageUrl: string | null = null;
-
-      if (isGroup) {
-        name = conversation.name || 'Group';
-        imageUrl = null;
-      } else {
-        // private convo: members include only the other participant (we excluded the requester above)
-        const other = conversation.members[0]?.user;
-        name = other ? other.email : null;
-        imageUrl = other ? (other.profile_image ?? null) : null;
-      }
-
-      const latest = conversation.messages?.[0];
-      const latestMessage = latest
-        ? { content: latest.content, status: latest.status }
-        : { content: null, status: null };
-
-      // memberCount from _count (total members in the conversation)
-      const memberCount =
-        (conversation as any)._count?.members ??
-        conversation.members.length + 1;
-
-      // preview of other members (up to 3)
-      const otherMembers = (conversation.members || [])
-        .slice(0, 3)
-        .map((member) => ({
-          email: member.user.email,
-          profile_image: member.user.profile_image ?? null,
-        }));
-
-      return {
-        id: conversation.id,
-        name,
-        latestMessage,
-        imageUrl,
-        memberCount,
-        otherMembers,
-        isGroup,
-      };
-    });
-
-    return mappedConversation;
+    return conversations.map((conversation) =>
+      this.mapConversationForList(conversation),
+    );
   }
 
-  async getConversationName(conversationId: string, requesterId: string) {
+  async getConversationName(
+    conversationId: string,
+    requesterId: string,
+  ): Promise<string> {
     const conversation = await this.prisma.conversation.findUnique({
       where: { id: conversationId },
       include: {
@@ -281,11 +328,70 @@ export class MessageService {
       },
     });
     if (conversation?.isGroup) {
-      return conversation.name;
+      return conversation.name as string;
     }
     return (
-      conversation?.members[0].user.full_name ||
-      conversation?.members[0].user.email
+      (conversation?.members[0].user.full_name as string) ||
+      (conversation?.members[0].user.email as string)
     );
+  }
+
+  async normalizeConversation(
+    conversationId: string,
+    userId: string,
+  ): Promise<ReturnConversationDto> {
+    const conversation = await this.prisma.conversation.findUnique({
+      where: { id: conversationId },
+      include: {
+        messages: true,
+        members: {
+          include: {
+            user: {
+              select: {
+                email: true,
+                profile_image: true,
+              },
+            },
+          },
+        },
+      },
+    });
+    if (!conversation) {
+      throw new NotFoundException('Conversation not found');
+    }
+    const latest = conversation.messages?.[0];
+    const latestMessage = latest
+      ? { content: latest.content, status: latest.status }
+      : { content: null, status: null };
+    const otherMembers = (conversation.members || [])
+      .slice(0, 3)
+      .map((member) => ({
+        id: member.userId,
+        email: member.user.email,
+        profile_image: member.user.profile_image ?? null,
+      }));
+
+    const name = await this.getConversationName(conversation.id, userId);
+
+    if (conversation.isGroup) {
+      return {
+        id: conversation.id,
+        name,
+        latestMessage,
+        imageUrl: null,
+        memberCount: conversation.members.length,
+        members: otherMembers,
+        isGroup: conversation.isGroup,
+      };
+    }
+    return {
+      id: conversation.id,
+      name,
+      latestMessage,
+      imageUrl: (conversation as any).image_url,
+      memberCount: conversation.members.length,
+      members: otherMembers,
+      isGroup: conversation.isGroup,
+    };
   }
 }

@@ -59,6 +59,7 @@ model Conversation {
   isGroup     Boolean               @default(false)
   createdAt   DateTime              @default(now())
   updatedAt   DateTime              @updatedAt
+  image_url   String?
 
   // Relations
   members     ConversationMember[]

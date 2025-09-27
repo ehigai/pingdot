@@ -161,7 +161,7 @@ export class MessageGateway
     client.join(conversation.id);
 
     const participantsId = conversation.members.map((conversationMember) => ({
-      id: conversationMember.userId,
+      id: conversationMember.id,
     }));
 
     // Notify all participants individually
