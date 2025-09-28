@@ -1,4 +1,4 @@
-import { UseGuards, Logger } from '@nestjs/common';
+import { UseGuards, Logger, Body, ParseUUIDPipe } from '@nestjs/common';
 import {
   ConnectedSocket,
   MessageBody,
@@ -69,16 +69,46 @@ export class MessageGateway
       const payload = await this.jwtService.verifyAsync(token, {
         secret: jwtConstants.secret,
       });
+      const userId = payload.sub;
       // attach payload
       (client as any).user = payload;
-      this.logger.log(`User ${payload.sub} connected with socket ${client.id}`);
+      this.logger.log(`User ${userId} connected with socket ${client.id}`);
 
       // normal connection flow
-      this.userSocketMap.set(payload.sub, client.id);
-      await this.userService.setPresence(payload.sub, true);
-      this.server.emit('presence', { userId: payload.sub, online: true });
+      this.userSocketMap.set(userId, client.id);
+      await this.userService.setPresence(userId, true);
+
+      // Join user room
+      client.join(userId);
+
+      const conversations =
+        await this.messageService.findAllUserConversations(userId);
+
+      // Join all conversation rooms
+      conversations.forEach((c) => client.join(c.id));
+
+      // Find messages that this user hasn’t acknowledged as delivered and deliver them
+
+      const undelivered =
+        await this.messageService.findUndeliveredMessages(userId);
+
+      for (const msg of undelivered) {
+        await this.messageService.markDelivered(msg.id, userId);
+
+        this.server.to(msg.senderId).emit('message:statusUpdated', {
+          messageId: msg.id,
+          status: 'DELIVERED',
+        });
+      }
+
+      this.logger.log(`User ${userId} connected. Joined rooms:`, [
+        userId,
+        ...conversations.map((c) => c.id),
+      ]);
+      this.server.emit('presence', { userId: userId, online: true });
     } catch (err) {
       this.logger.warn('Invalid token, disconnecting...', err as any);
+      this.server.emit('InvalidToken', { reason: 'TokenExpired' });
       client.disconnect();
     }
   }
@@ -149,9 +179,6 @@ export class MessageGateway
     const userId = client.user?.sub as string;
     if (!userId) return { status: 'error', error: 'Unauthorized' };
 
-    console.log('REACHEDHERE');
-    console.log('user data', data);
-
     // Persist conversation
     const conversation = await this.messageService.createConversation(
       data,
@@ -181,6 +208,35 @@ export class MessageGateway
 
     // Ack back to sender
     return { status: 'ok', conversation };
+  }
+
+  // Mark as delivered
+  @SubscribeMessage('message:delivered')
+  async markMessageAsDelivered(
+    @MessageBody('messageId', new ParseUUIDPipe({ version: '4' }))
+    messageId: string,
+    @ConnectedSocket() client: Socket,
+  ) {
+    const userId = client.user?.sub;
+    if (!userId) return;
+    const senderId = await this.messageService.markDelivered(messageId, userId);
+    this.server
+      .to(senderId)
+      .emit('message:statusUpdated', { messageId, status: 'DELIVERED' });
+  }
+
+  @SubscribeMessage('message:read')
+  async markMessageAsRead(
+    @MessageBody('messageId', new ParseUUIDPipe({ version: '4' }))
+    messageId: string,
+    @ConnectedSocket() client: Socket,
+  ) {
+    const userId = client.user?.sub;
+    if (!userId) return;
+    const senderId = await this.messageService.markRead(messageId, userId);
+    this.server
+      .to(senderId)
+      .emit('message:statusUpdated', { messageId, status: 'SENT' });
   }
 
   // Send a message to a conversation
