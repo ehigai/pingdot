@@ -9,6 +9,7 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateConversationDto } from './dto/create-conversation.dto';
 import { UsersService } from 'src/users/users.service';
 import { ReturnConversationDto } from './dto/return-conversation.dto';
+import { Prisma } from '@prisma/client';
 
 @Injectable()
 export class MessageService {
@@ -44,6 +45,7 @@ export class MessageService {
           imageUrl: true,
           status: true,
           conversationId: true,
+          createdAt: true,
           sender: {
             select: {
               id: true,
@@ -76,6 +78,88 @@ export class MessageService {
 
   remove(id: number) {
     return this.prisma.message.delete({ where: { id: String(id) } });
+  }
+
+  async markDelivered(messageId: string, userId: string) {
+    await this.prisma.messageDelivery.upsert({
+      where: { messageId_userId: { messageId, userId } },
+      update: {},
+      create: { messageId, userId },
+    });
+
+    // check if all recipients got it
+    const message = await this.prisma.message.findUnique({
+      where: { id: messageId },
+      include: {
+        conversation: { include: { members: true } },
+        deliveries: true,
+      },
+    });
+    if (!message || message === null) {
+      throw new NotFoundException();
+    }
+
+    const recipientIds = message.conversation.members
+      .map((m) => m.userId)
+      .filter((uid) => uid !== message.senderId);
+
+    const allDelivered = recipientIds.every((uid) =>
+      message.deliveries.some((d) => d.userId === uid),
+    );
+
+    if (allDelivered && message.status !== 'DELIVERED') {
+      await this.prisma.message.update({
+        where: { id: messageId },
+        data: { status: 'DELIVERED' },
+      });
+    }
+
+    return message.senderId;
+  }
+
+  async markRead(messageId: string, userId: string) {
+    await this.prisma.messageRead.upsert({
+      where: { messageId_userId: { messageId, userId } },
+      update: {},
+      create: { messageId, userId },
+    });
+
+    // check if all recipients read it
+    const message = await this.prisma.message.findUnique({
+      where: { id: messageId },
+      include: { conversation: { include: { members: true } }, reads: true },
+    });
+    if (!message || message === null) {
+      throw new NotFoundException();
+    }
+
+    const recipientIds = message.conversation.members
+      .map((m) => m.userId)
+      .filter((uid) => uid !== message.senderId);
+
+    const allRead = recipientIds.every((uid) =>
+      message.reads.some((r) => r.userId === uid),
+    );
+
+    if (allRead && message.status !== 'READ') {
+      await this.prisma.message.update({
+        where: { id: messageId },
+        data: { status: 'READ' },
+      });
+    }
+
+    return message.senderId;
+  }
+
+  async findUndeliveredMessages(userId: string) {
+    return await this.prisma.message.findMany({
+      where: {
+        conversation: {
+          members: { some: { userId } },
+        },
+        deliveries: { none: { userId } }, // not yet delivered to this user
+      },
+    });
   }
 
   // -------------------------
@@ -188,6 +272,7 @@ export class MessageService {
             imageUrl: true,
             status: true,
             conversationId: true,
+            createdAt: true,
             sender: {
               select: {
                 id: true,
