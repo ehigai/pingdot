@@ -114,7 +114,7 @@ export class MessageService {
       });
     }
 
-    return message.senderId;
+    return message;
   }
 
   async markRead(messageId: string, userId: string) {
@@ -148,7 +148,7 @@ export class MessageService {
       });
     }
 
-    return message.senderId;
+    return message;
   }
 
   async findUndeliveredMessages(userId: string) {
@@ -232,8 +232,13 @@ export class MessageService {
 
     const latest = conversation.messages?.[0];
     const latestMessage = latest
-      ? { content: latest.content, status: latest.status }
-      : { content: null, status: null };
+      ? {
+          content: latest.content,
+          status: latest.status,
+          createdAt: latest.createdAt,
+          senderId: latest.senderId,
+        }
+      : { content: null, status: null, createdAt: null, senderId: null };
 
     const memberCount =
       (conversation as any)._count?.members ?? conversation.members.length + 1;
@@ -412,7 +417,12 @@ export class MessageService {
         messages: {
           orderBy: { createdAt: 'desc' },
           take: 1,
-          select: { content: true, status: true, createdAt: true },
+          select: {
+            content: true,
+            status: true,
+            createdAt: true,
+            senderId: true,
+          },
         },
         _count: {
           select: { members: true },
@@ -481,8 +491,13 @@ export class MessageService {
     }
     const latest = conversation.messages?.[0];
     const latestMessage = latest
-      ? { content: latest.content, status: latest.status }
-      : { content: null, status: null };
+      ? {
+          content: latest.content,
+          status: latest.status,
+          createdAt: latest.createdAt,
+          senderId: latest.senderId,
+        }
+      : { content: null, status: null, createdAt: null, senderId: null };
     const otherMembers = (conversation.members || [])
       .slice(0, 3)
       .map((member) => ({

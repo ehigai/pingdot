@@ -94,11 +94,9 @@ export class MessageGateway
 
       for (const msg of undelivered) {
         await this.messageService.markDelivered(msg.id, userId);
-
-        this.server.to(msg.senderId).emit('message:statusUpdated', {
-          messageId: msg.id,
-          status: 'DELIVERED',
-        });
+        this.server
+          .to(msg.senderId)
+          .emit('message:statusUpdated', { ...msg, status: 'DELIVERED' });
       }
 
       this.logger.log(`User ${userId} connected. Joined rooms:`, [
@@ -156,22 +154,8 @@ export class MessageGateway
     }
   }
 
-  // Join a conversation room
-  @SubscribeMessage('join-conversation')
-  async handleJoinConversation(
-    @MessageBody() data: { conversationId: string },
-    @ConnectedSocket() client: Socket,
-  ) {
-    const userId = client.user?.sub as string;
-    if (!userId) return;
-    client.join(data.conversationId);
-    this.logger.log(
-      `User ${userId} joined conversation ${data.conversationId}`,
-    );
-  }
-
   // New conversation
-  @SubscribeMessage('create-conversation')
+  @SubscribeMessage('conversation:create')
   async handleNewConversation(
     @MessageBody() data: CreateConversationDto,
     @ConnectedSocket() client: Socket,
@@ -198,13 +182,13 @@ export class MessageGateway
         const socketId = this.userSocketMap.get(participant.id);
         console.log('SocketId', socketId);
         if (socketId) {
-          this.server.to(socketId).emit('new-conversation', conversation);
+          this.server.to(socketId).emit('conversation:new', conversation);
         }
       }
     }
 
     // Also broadcast to conversation room
-    //this.server.to(conversation.id).emit('new-conversation', conversation);
+    //this.server.to(conversation.id).emit('conversation:new', conversation);
 
     // Ack back to sender
     return { status: 'ok', conversation };
@@ -219,28 +203,30 @@ export class MessageGateway
   ) {
     const userId = client.user?.sub;
     if (!userId) return;
-    const senderId = await this.messageService.markDelivered(messageId, userId);
+    const message = await this.messageService.markDelivered(messageId, userId);
+    console.log('SERVERMESSAGE', message);
     this.server
-      .to(senderId)
-      .emit('message:statusUpdated', { messageId, status: 'DELIVERED' });
+      .to(message.senderId)
+      .emit('message:statusUpdated', { ...message, status: 'DELIVERED' });
   }
 
   @SubscribeMessage('message:read')
   async markMessageAsRead(
-    @MessageBody('messageId', new ParseUUIDPipe({ version: '4' }))
-    messageId: string,
+    @MessageBody() data: { conversationId: string; messageIds: string[] },
     @ConnectedSocket() client: Socket,
   ) {
     const userId = client.user?.sub;
     if (!userId) return;
-    const senderId = await this.messageService.markRead(messageId, userId);
-    this.server
-      .to(senderId)
-      .emit('message:statusUpdated', { messageId, status: 'SENT' });
+    for (const messageId of data.messageIds) {
+      const message = await this.messageService.markRead(messageId, userId);
+      this.server
+        .to(data.conversationId) //send to conversation room instead of sender
+        .emit('message:statusUpdated', { ...message, status: 'READ' });
+    }
   }
 
   // Send a message to a conversation
-  @SubscribeMessage('send-message')
+  @SubscribeMessage('message:send')
   async handleSendMessage(
     @MessageBody()
     data: {
@@ -261,7 +247,7 @@ export class MessageGateway
       } as any);
 
       // Broadcast to conversation room
-      this.server.to(data.conversationId).emit('new-message', saved);
+      this.server.to(data.conversationId).emit('message:new', saved);
       // Ack back to sender
       return { status: 'ok', clientId: data.message.clientId, message: saved };
     } catch (err: any) {
@@ -333,7 +319,7 @@ export class MessageGateway
   sendMessageToUser(userId: string, message: any) {
     const socketId = this.userSocketMap.get(userId);
     if (socketId) {
-      this.server.to(socketId).emit('new-message', message);
+      this.server.to(socketId).emit('message:new', message);
     }
   }
 }

@@ -4,6 +4,8 @@ export class ReturnConversationDto {
   latestMessage: {
     content: string | null;
     status: string | null;
+    createdAt: Date | null;
+    senderId: string | null;
   };
   imageUrl: string | null;
   memberCount: number;
