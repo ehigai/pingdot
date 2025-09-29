@@ -375,8 +375,13 @@ export class MessageService {
       data: convoData,
       include: { members: true, messages: true },
     });
+    const messageIds = newConversation.messages.map((m) => m.id);
 
-    return await this.normalizeConversation(newConversation.id, userId);
+    const normConvo = await this.normalizeConversation(
+      newConversation.id,
+      userId,
+    );
+    return { ...normConvo, messageIds };
   }
 
   async findAllUserConversations(

@@ -13,4 +13,5 @@ export class ReturnConversationDto {
     profile_image: string | null;
   }[];
   isGroup: boolean;
+  messageIds?: string[];
 }
