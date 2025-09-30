@@ -75,16 +75,6 @@ export class MessageGateway
       await this.markUserOnline(userId);
       await this.reconcileUndelivered(userId);
 
-      const undelivered =
-        await this.messageService.findUndeliveredMessages(userId);
-
-      for (const msg of undelivered) {
-        await this.messageService.markDelivered(msg.id, userId);
-        this.server
-          .to(msg.senderId)
-          .emit('message:statusUpdated', { ...msg, status: 'DELIVERED' });
-      }
-
       this.logger.log(`User ${userId} connected. Joined rooms:`, [
         userId,
         ...conversations.map((c) => c.id),
@@ -136,12 +126,12 @@ export class MessageGateway
         await this.messageService.markDelivered(msg.id, userId);
         if (msg.conversation.isGroup) {
           this.server.to(msg.conversationId).emit('message:statusUpdated', {
-            messageId: msg.id,
+            ...msg,
             status: 'DELIVERED',
           });
         }
         this.server.to(msg.senderId).emit('message:statusUpdated', {
-          messageId: msg.id,
+          ...msg,
           status: 'DELIVERED',
         });
       }
