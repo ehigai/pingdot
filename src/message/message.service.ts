@@ -9,7 +9,7 @@ import { PrismaService } from 'src/prisma/prisma.service';
 import { CreateConversationDto } from './dto/create-conversation.dto';
 import { UsersService } from 'src/users/users.service';
 import { ReturnConversationDto } from './dto/return-conversation.dto';
-import { Prisma } from '@prisma/client';
+import { Message, Prisma } from '@prisma/client';
 
 @Injectable()
 export class MessageService {
@@ -157,8 +157,10 @@ export class MessageService {
         conversation: {
           members: { some: { userId } },
         },
+        NOT: { senderId: userId },
         deliveries: { none: { userId } }, // not yet delivered to this user
       },
+      include: { conversation: { select: { isGroup: true } } },
     });
   }
 

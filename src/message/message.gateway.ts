@@ -42,27 +42,13 @@ export class MessageGateway
   ) {}
 
   async handleConnection(client: Socket) {
-    // Try to get token from handshake auth/header/query
-    const headerAuth = client.handshake?.headers?.authorization;
-    let token: string | undefined;
-    if (headerAuth) {
-      const [, t] = headerAuth.split(' ');
-      token = t;
-    }
-    if (!token && client.handshake?.auth?.token) {
-      const [, t] = client.handshake.auth.token.split(' ');
-      token = t;
-    }
-    if (!token && client.handshake?.query?.token) {
-      token = client.handshake.query.token as string | undefined;
-    }
-
     this.logger.log(`New client connected: ${client.id}`);
+
+    const token = this.extractToken(client);
 
     if (!token) {
       this.logger.warn('No token provided, disconnecting...');
-      client.disconnect();
-      return;
+      return client.disconnect();
     }
 
     try {
@@ -74,7 +60,6 @@ export class MessageGateway
       (client as any).user = payload;
       this.logger.log(`User ${userId} connected with socket ${client.id}`);
 
-      // normal connection flow
       this.userSocketMap.set(userId, client.id);
       await this.userService.setPresence(userId, true);
 
@@ -87,7 +72,8 @@ export class MessageGateway
       // Join all conversation rooms
       conversations.forEach((c) => client.join(c.id));
 
-      // Find messages that this user hasn’t acknowledged as delivered and deliver them
+      await this.markUserOnline(userId);
+      await this.reconcileUndelivered(userId);
 
       const undelivered =
         await this.messageService.findUndeliveredMessages(userId);
@@ -120,6 +106,45 @@ export class MessageGateway
 
       // Optional: broadcast user presence
       this.server.emit('presence', { userId: user.sub, online: false });
+    }
+  }
+
+  private extractToken(client: Socket): string | null {
+    const headerAuth = client.handshake?.headers?.authorization;
+    if (headerAuth) {
+      const [, t] = headerAuth.split(' ');
+      return t;
+    }
+    if (client.handshake?.auth?.token) {
+      const [, t] = client.handshake.auth.token.split(' ');
+      return t;
+    }
+    return (client.handshake?.query?.token as string) || null;
+  }
+
+  private async markUserOnline(userId: string) {
+    await this.userService.setPresence(userId, true);
+    this.server.emit('presence', { userId, online: true });
+  }
+
+  private async reconcileUndelivered(userId: string) {
+    const undelivered =
+      await this.messageService.findUndeliveredMessages(userId);
+
+    if (undelivered.length) {
+      for (const msg of undelivered) {
+        await this.messageService.markDelivered(msg.id, userId);
+        if (msg.conversation.isGroup) {
+          this.server.to(msg.conversationId).emit('message:statusUpdated', {
+            messageId: msg.id,
+            status: 'DELIVERED',
+          });
+        }
+        this.server.to(msg.senderId).emit('message:statusUpdated', {
+          messageId: msg.id,
+          status: 'DELIVERED',
+        });
+      }
     }
   }
 
