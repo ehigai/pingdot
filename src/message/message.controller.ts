@@ -11,7 +11,6 @@ import {
 import { MessageService } from './message.service';
 import { CreateMessageDto } from './dto/create-message.dto';
 import { UpdateMessageDto } from './dto/update-message.dto';
-import { CreateConversationDto } from './dto/create-conversation.dto';
 
 @Controller('message')
 export class MessageController {
